@@ -14,7 +14,8 @@ float timeout; // unit: us
 float dist_min, dist_max, dist_raw; // unit: mm
 unsigned long last_sampling_time; // unit: ms
 float scale; // used for pulse duration to distance conversion
-float last_reading;
+float last_reading; // 바로 직전에 측정했던 거리값
+int brightness; // LED 밝기
 
 void setup() {
 // initialize GPIO pins
@@ -31,10 +32,11 @@ void setup() {
   scale = 0.001 * 0.5 * SND_VEL;
 
 // initialize serial port
-  Serial.begin(57600);
+  Serial.begin(115200);
 
 // initialize last sampling time
   last_sampling_time = 0;
+  last_reading = 0;
 }
 
 void loop() {
@@ -44,7 +46,7 @@ void loop() {
 
 // get a distance reading from the USS
   dist_raw = USS_measure(PIN_TRIG,PIN_ECHO);
-
+  last_reading = dist_raw;
 // output the read value to the serial port
   Serial.print("Min:0,");
   Serial.print("raw:");
@@ -53,22 +55,13 @@ void loop() {
   Serial.println("Max:400");
 
 // turn on the LED if the distance is between dist_min and dist_max
-  int value;
-  
-  if(dist_raw <= 100 || dist_raw >= 300){
-    value = 255;
-  }
-  else if((dist_raw > 100 && dist_raw < 150) || (dist_raw > 250 && dist_raw <300)){
-    value = 190;
-  }
-  else if((dist_raw >= 150 && dist_raw < 200) || (dist_raw > 200 && dist_raw < 250)){
-    value = 127;
+  if(100 <= dist_raw && dist_raw <= 200) {
+    brightness = (-2.55 * dist_raw) + 510; // 100 <= dist_raw <= 200일 경우
   }
   else {
-    value = 0;
+    brightness = (2.55 * dist_raw) - 510; // 200 <= dist_raw <= 300일 경우
   }
-
-  analogWrite(PIN_LED, value);
+  analogWrite(PIN_LED, brightness); 
   
 // update last sampling time
   last_sampling_time += INTERVAL;
@@ -82,14 +75,10 @@ float USS_measure(int TRIG, int ECHO)
   delayMicroseconds(10);
   digitalWrite(TRIG, LOW);
   reading = pulseIn(ECHO, HIGH, timeout) * scale; // unit: mm
-  
   if(reading < dist_min || reading > dist_max) reading = 0.0; // return 0 when out of range.
-  
-  if (reading == 0 && last_reading != 0){
+  if(reading == 0){
     reading = last_reading;
   }
-  last_reading = reading;
-  
   return reading;
   // Pulse duration to distance conversion example (target distance = 17.3m)
   // - round trip distance: 34.6m
