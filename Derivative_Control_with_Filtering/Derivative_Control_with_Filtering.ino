@@ -18,16 +18,16 @@
 // Servo range
 #define _DUTY_MIN 700 // 서보의 최소 각도값***
 #define _DUTY_NEU 1320 // 서보의 중간 각도값***
-#define _DUTY_MAX 1900 // 서보의 최대 각도값***
+#define _DUTY_MAX 1900 // 서보의 최대 각도값*** 
 
 // 레일플레이트 높이를 조정하는데 필요한 서보의 각도값
-#define _SERVO_HIGH 1160 // 22cm일때 서보의 각도값***
+#define _SERVO_HIGH 1170 // 22cm일때 서보의 각도값***
 #define _SERVO_NEU 1320 // 20cm(수평)일때 서보의 각도값***
-#define _SERVO_LOW 1470 // 18cm일때 서보의 각도값***
+#define _SERVO_LOW 1480 // 18cm일때 서보의 각도값***
 
 // Servo speed control
-#define _SERVO_ANGLE 60 // 서보 각도 설정
-#define _SERVO_SPEED 100 // 서보 속도 설정
+#define _SERVO_ANGLE 30 // 서보 각도 설정
+#define _SERVO_SPEED 200 // 서보 속도 설정
 
 //Event periods
 #define _INTERVAL_DIST 20 // 거리센서 측정 주기
@@ -35,18 +35,20 @@
 #define _INTERVAL_SERIAL 100 // 제어 상태 시리얼 출력 주기
 
 // PID parameters
-#define _KP 2.0 // 비례이득
-#define _KD 28.0 // 미분이득
+#define _KP 1.0 // 비례이득
+#define _KD 20.5 // 미분이득
 
 // Servo instance
 Servo myservo; // 서보 정의
 
-int a, b; // 적외선거리센서 보정에 필요한 변수
+int a, b, c, d, e, f, g; // 적외선거리센서 보정을 위한 구간별 보간에 필요한 변수
 
 // Distance sensor
 float dist_target; // 탁구공 목표 값
-
-float dist_filtered; // 중위수필터를 통해 얻은 값
+float dist_mid;
+float dist_filtered;
+float dist_raw; // 적외선센서로부터 얻은 거리 값
+float dist_cali; // 구간별 보간을 통해 얻은 거리 값
 float dist_ema; // ema 필터링을 거친 거리 값
 float alpha; // ema 필터링의 알파값을 저장하는 변수
 
@@ -65,11 +67,46 @@ int duty_target, duty_curr; // duty_target: 목표위치
 // PID variables
 float error_curr, error_prev, control, pterm, dterm, iterm;
 
-// 센서값을 읽고 얻은 거리를 리턴하는 함수
+// 센서값을 읽고 구간별 보간을 통해 얻은 거리를 리턴하는 함수
+
 float calcMid(short value){
   float volt = float(analogRead(PIN_IR));
   float val = ((6762.0/(volt-9.0))-4.0) * 10.0;
   return 100 + 300.0 / (b - a) * (val - a);
+}
+
+float calcDistance(float dist_raw){ 
+  // distance <= 150mm
+  if (dist_raw <= b){
+    dist_cali = 100 + (150 - 100) / (b - a) * (dist_raw - a);
+  }
+  
+  // 150mm < distance <= 200mm
+  else if(dist_raw > b && dist_raw <= c){
+    dist_cali = 150 + (200 - 150) / (c - b) * (dist_raw - b);
+  }
+  
+  // 200mm < distance <= 250mm
+  else if(dist_raw > c && dist_raw <= d){
+    dist_cali = 200 + (250 - 200) / (d - c) * (dist_raw - c);
+  }
+  
+  // 250mm < distance <= 300mm
+  else if(dist_raw > d && dist_raw <= e){
+    dist_cali = 250 + (300 - 250) / (e - d) * (dist_raw - d);
+  }
+
+  // 300mm < distance <= 350mm
+  else if(dist_raw > e && dist_raw <= f){
+    dist_cali = 300 + (350 - 300) / (f - e) * (dist_raw - e);
+  }
+
+  // 350mm < distance
+  else{
+    dist_cali = 350 + (400 - 350) / (g - f) * (dist_raw - f);
+  }
+  
+  return dist_cali;
 }
 
 MedianFilter<calcMid> filter;
@@ -81,9 +118,14 @@ void setup(){
 
   filter.init();
   
-  // 적외선센서 보정에 필요한 변수(각 거리에 따른 적외선센서의 거리 출력 값)
-  a = 107;  // 100mm
-  b = 470;  // 400mm
+  // 구간별 보간에 필요한 변수(각 거리에 따른 적외선센서의 거리 출력 값)
+  a = 89;  // 100mm
+  b = 147;  // 150mm  //147  
+  c = 191;  // 200mm
+  d = 212;  // 250mm
+  e = 240;  // 300mm
+  f = 265;  // 350mm
+  g = 290;  // 400mm
   
   // initialize global variables
   alpha = _DIST_ALPHA; // ema의 알파값 초기화
@@ -107,6 +149,7 @@ void setup(){
 
 
 void loop(){
+  
   unsigned long time_curr = millis(); // event 발생 조건 설정
   
   if(time_curr >= last_sampling_time_dist + _INTERVAL_DIST){
@@ -128,7 +171,8 @@ void loop(){
     
     if(filter.ready()){ // 필터가 값을 읽을 준비가 되었는지 확인
     
-      dist_filtered = filter.read(); // 중위수필터를 통해 얻은 값을 저장
+      dist_filtered = filter.read(); 
+      // dist_filtered = calcDistance(dist_mid); // 구간별 보간을 통해 얻은 값을 저장
 
       //ema 필터링
       if(dist_ema == 0){ 
@@ -143,13 +187,14 @@ void loop(){
       pterm = _KP * error_curr;
       dterm = _KD * (error_curr - error_prev);
       
-      if(pterm > 0){  // 탁구공이 255mm보다 가까이 있을 때
-        control = pterm + dterm;
+      if(pterm > 0){  // 탁구공이 가까이 있을 때
+        control = dterm + pterm;
       }
-      else{  // 탁구공이 255mm보다 멀리 있을 때
-        control = 2 * pterm + dterm;
+      else{  // 탁구공이 멀리 있을 때
+        control = dterm + 0.7 * pterm;
       }
-
+      
+      // control = dterm + pterm;
       duty_target = _DUTY_NEU + control;
 
       // keep duty_target value within the range of [_DUTY_MIN, _DUTY_MAX]
